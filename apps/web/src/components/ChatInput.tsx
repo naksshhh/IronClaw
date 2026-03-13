@@ -1,0 +1,197 @@
+import { useCallback, useRef, useState } from "react";
+import { ChevronDown, Paperclip, ArrowUp, Mic } from "lucide-react";
+import { AttachmentPreview } from "./AttachmentPreview";
+import type { ChatAttachment } from "@/types/chat";
+import { useSpeechToText } from "@/hooks/useSpeechToText";
+
+interface ChatInputProps {
+  value: string;
+  onChange: (value: string) => void;
+  onSubmit: (attachments: ChatAttachment[]) => void;
+  attachments: ChatAttachment[];
+  onRemoveAttachment: (id: string) => void;
+  onAddFiles: (files: FileList | File[]) => void;
+  llmModel?: string;
+  onLlmModelChange?: (model: string) => void;
+}
+
+export const ChatInput = ({ value, onChange, onSubmit, attachments, onRemoveAttachment, onAddFiles, llmModel, onLlmModelChange }: ChatInputProps) => {
+  const [modelOpen, setModelOpen] = useState(false);
+  const selectedModel = llmModel || "google/gemini-2.5-flash";
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Track the text that was there before we started listening
+  const preListeningTextRef = useRef<string>("");
+
+  // Speech-to-text hook
+  const { isListening, interimTranscript, startListening, stopListening, error } = useSpeechToText({
+    language: "en-US",
+    onInterimResult: (transcript) => {
+      // Update input with pre-listening text + interim transcript
+      const prefix = preListeningTextRef.current;
+      const separator = prefix && !prefix.endsWith(" ") ? " " : "";
+      onChange(prefix + separator + transcript);
+    },
+    onFinalResult: (transcript) => {
+      // Update input with pre-listening text + final transcript + space
+      const prefix = preListeningTextRef.current;
+      const separator = prefix && !prefix.endsWith(" ") ? " " : "";
+      const newText = prefix + separator + transcript + " ";
+      onChange(newText);
+      // Update pre-listening text to include the final result for continuous dictation
+      preListeningTextRef.current = newText;
+    },
+    onError: (err) => {
+      console.error("Speech recognition error:", err);
+    },
+  });
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      onSubmit(attachments);
+    }
+  };
+
+  const handleFiles = useCallback(
+    (files?: FileList | null) => {
+      if (!files || files.length === 0) return;
+      onAddFiles(files);
+    },
+    [onAddFiles],
+  );
+
+  const handleMicClick = useCallback(() => {
+    if (isListening) {
+      stopListening();
+    } else {
+      // Store the current text before we start listening
+      preListeningTextRef.current = value;
+      startListening();
+    }
+  }, [isListening, startListening, stopListening, value]);
+
+  return (
+    <div className="w-full max-w-3xl mx-auto">
+      <div className="bg-secondary/50 border border-white/5 rounded-3xl p-3 shadow-2xl relative group focus-within:border-brand-pink/30 transition-all">
+        <AttachmentPreview attachments={attachments} onRemove={onRemoveAttachment} />
+
+        <div className="flex flex-col">
+          <textarea
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Type your message here..."
+            rows={1}
+            className="w-full px-5 pt-3 pb-2 bg-transparent resize-none focus:outline-none text-white placeholder:text-white/10 text-base font-medium min-h-[44px] max-h-48"
+            style={{ fieldSizing: "content" } as React.CSSProperties}
+          />
+
+          <div className="flex items-center justify-between px-3 pb-2">
+            <div className="flex items-center gap-1">
+              <div className="relative">
+                <button
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest text-white/20 hover:text-white/60 hover:bg-white/5 transition-all"
+                  onClick={() => setModelOpen((v) => !v)}
+                >
+                  {[
+                    { label: "GPT-5.1", value: "openai/gpt-5.1" },
+                    { label: "GPT-5.2", value: "openai/gpt-5.2" },
+                    { label: "Gemini 2.5 Flash", value: "google/gemini-2.5-flash" },
+                    { label: "Gemini 2.5 Pro", value: "google/gemini-2.5-pro" },
+                    { label: "Gemini 3 Flash", value: "google/gemini-3-flash" },
+                    { label: "Gemini 3 Pro Preview", value: "google/gemini-3-pro-preview" },
+                    { label: "Claude Sonnet 4.5", value: "anthropic/claude-sonnet-4.5" },
+                    { label: "MiniMax M2", value: "minimax/minimax-m2" },
+                    { label: "Kimi K2 Thinking", value: "moonshotai/kimi-k2-thinking" },
+                    { label: "Qwen3 8B", value: "qwen/qwen3-8b" },
+                  ].find(m => m.value === selectedModel)?.label || selectedModel}
+                  <ChevronDown className={`h-3 w-3 transition-transform ${modelOpen ? 'rotate-180' : ''}`} />
+                </button>
+
+                {modelOpen && (
+                  <div className="absolute bottom-full mb-3 left-0 w-72 bg-card border border-white/5 rounded-2xl shadow-2xl p-2 z-50 animate-in fade-in zoom-in-95 duration-200 max-h-96 overflow-y-auto">
+                    {[
+                      { label: "GPT-5.1", value: "openai/gpt-5.1" },
+                      { label: "GPT-5.2", value: "openai/gpt-5.2" },
+                      { label: "Gemini 2.5 Flash", value: "google/gemini-2.5-flash" },
+                      { label: "Gemini 2.5 Pro", value: "google/gemini-2.5-pro" },
+                      { label: "Gemini 3 Flash", value: "google/gemini-3-flash" },
+                      { label: "Gemini 3 Pro Preview", value: "google/gemini-3-pro-preview" },
+                      { label: "Claude Sonnet 4.5", value: "anthropic/claude-sonnet-4.5" },
+                      { label: "MiniMax M2", value: "minimax/minimax-m2" },
+                      { label: "Kimi K2 Thinking", value: "moonshotai/kimi-k2-thinking" },
+                      { label: "Qwen3 8B", value: "qwen/qwen3-8b" },
+                    ].map((model) => (
+                      <button
+                        key={model.value}
+                        className={`w-full text-left px-4 py-2 rounded-xl text-[11px] font-bold uppercase tracking-widest transition-all flex items-center justify-between ${selectedModel === model.value
+                          ? "bg-brand-pink text-white"
+                          : "text-white/40 hover:bg-white/5 hover:text-white"
+                          }`}
+                        onClick={() => {
+                          onLlmModelChange?.(model.value);
+                          setModelOpen(false);
+                        }}
+                      >
+                        {model.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="h-4 w-px bg-white/5 mx-1" />
+
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="p-2 rounded-xl text-white/20 hover:text-white/60 hover:bg-white/5 transition-all"
+                title="Attach"
+              >
+                <Paperclip className="h-4 w-4" />
+              </button>
+
+              <input
+                type="file"
+                multiple
+                accept="image/*,application/pdf"
+                className="hidden"
+                ref={fileInputRef}
+                onChange={(e) => handleFiles(e.target.files)}
+              />
+
+              <button
+                onClick={handleMicClick}
+                className={`p-2 rounded-xl transition-all relative ${isListening
+                    ? "text-brand-pink bg-brand-pink/10 shadow-[0_0_15px_rgba(255,46,144,0.3)]"
+                    : "text-white/20 hover:text-white/60 hover:bg-white/5"
+                  }`}
+                title={isListening ? "Stop listening" : "Start voice input"}
+              >
+                <Mic className={`h-4 w-4 ${isListening ? "animate-pulse" : ""}`} />
+                {isListening && (
+                  <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-brand-pink animate-ping" />
+                )}
+              </button>
+
+              {error && (
+                <span className="text-[9px] text-red-400 ml-2">{error}</span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => onSubmit(attachments)}
+                disabled={!value.trim() && attachments.length === 0}
+                className={`w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center transition-all disabled:opacity-30 ${value.trim() || attachments.length > 0 ? "bg-brand-pink/20 text-brand-pink shadow-[0_0_20px_rgba(255,46,144,0.2)]" : "text-white/10"
+                  }`}
+              >
+                <ArrowUp className="h-5 w-5" />
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
