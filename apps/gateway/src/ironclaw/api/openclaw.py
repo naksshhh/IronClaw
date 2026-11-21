@@ -9,7 +9,6 @@ Provides the webhook endpoint for receiving tasks from OpenClaw:
 
 import logging
 import os
-from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -24,43 +23,35 @@ from ..services.openclaw_service import (
     init_openclaw_service,
     get_openclaw_service,
 )
+from ..utils.config import MONOREPO_ROOT
 
-# Load .env from project root
-PROJECT_ROOT = Path(__file__).resolve().parents[6]  # Navigate up to monorepo root
-ENV_PATH = PROJECT_ROOT / ".env"
+# Load .env from the monorepo root. parents[6] is the directory above the repo.
+ENV_PATH = MONOREPO_ROOT / ".env"
 if ENV_PATH.exists():
     load_dotenv(ENV_PATH)
-else:
-    # Fallback: try to find .env by walking up directories
-    current = Path(__file__).resolve().parent
-    while current != current.parent:
-        potential_env = current / ".env"
-        if potential_env.exists():
-            load_dotenv(potential_env)
-            break
-        current = current.parent
 
 logger = logging.getLogger("ironclaw.api.openclaw")
 router = APIRouter()
 
 
 # Initialize service on module load
-def _get_hook_token() -> str:
-    """Get the OpenClaw hook token from environment."""
-    token = os.getenv("OPENCLAW_HOOK_TOKEN")
+def _get_hook_token() -> Optional[str]:
+    """Get the OpenClaw hook token from the environment.
+
+    There is no built-in default. A missing token disables the webhook
+    instead of accepting a token that is published in source control.
+    """
+    token = (os.getenv("OPENCLAW_HOOK_TOKEN") or "").strip()
     if not token:
-        # Fallback to a default dev token (should be set in production)
-        token = os.getenv("IRONCLAW_WEBHOOK_TOKEN", "dev-token-change-me")
-        logger.warning(
-            "OPENCLAW_HOOK_TOKEN not set, using fallback. "
-            "Set OPENCLAW_HOOK_TOKEN in .env for production!"
-        )
+        logger.warning("OPENCLAW_HOOK_TOKEN is not set. OpenClaw webhook is disabled.")
+        return None
     return token
 
 
 # Initialize service
+_hook_token = _get_hook_token()
 try:
-    _service = init_openclaw_service(_get_hook_token())
+    _service = init_openclaw_service(_hook_token) if _hook_token else None
 except Exception as e:
     logger.error(f"Failed to initialize OpenClaw service: {e}")
     _service = None
@@ -106,8 +97,8 @@ async def openclaw_webhook(
     """
     if _service is None:
         raise HTTPException(
-            status_code=500,
-            detail="OpenClaw service not initialized",
+            status_code=503,
+            detail="OPENCLAW_HOOK_TOKEN is not configured",
         )
 
     # Log incoming request (structured JSON logging)
@@ -154,8 +145,8 @@ async def list_tasks(
     """
     if _service is None:
         raise HTTPException(
-            status_code=500,
-            detail="OpenClaw service not initialized",
+            status_code=503,
+            detail="OPENCLAW_HOOK_TOKEN is not configured",
         )
 
     if not _service.validate_token(authorization):
@@ -197,8 +188,8 @@ async def get_task_status(
     """
     if _service is None:
         raise HTTPException(
-            status_code=500,
-            detail="OpenClaw service not initialized",
+            status_code=503,
+            detail="OPENCLAW_HOOK_TOKEN is not configured",
         )
 
     if not _service.validate_token(authorization):
@@ -233,8 +224,8 @@ async def cancel_task(
     """
     if _service is None:
         raise HTTPException(
-            status_code=500,
-            detail="OpenClaw service not initialized",
+            status_code=503,
+            detail="OPENCLAW_HOOK_TOKEN is not configured",
         )
 
     if not _service.validate_token(authorization):

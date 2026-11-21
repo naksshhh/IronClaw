@@ -2,6 +2,8 @@
 Speech-to-Text WebSocket endpoint for real-time transcription using Google Cloud Speech-to-Text API.
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
@@ -12,7 +14,13 @@ from pathlib import Path
 from typing import Generator
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from google.cloud import speech
+
+
+def _speech():
+    """Import the speech client when a session starts, not at process boot."""
+    from google.cloud import speech
+
+    return speech
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -68,7 +76,7 @@ class SpeechToTextSession:
                 if chunk is None:
                     logger.info("Received stop signal in audio generator")
                     break
-                yield speech.StreamingRecognizeRequest(audio_content=chunk)
+                yield _speech().StreamingRecognizeRequest(audio_content=chunk)
             except queue.Empty:
                 continue
             except Exception as e:
@@ -86,6 +94,7 @@ class SpeechToTextSession:
             else:
                 logger.warning("No credentials file found!")
                 
+            speech = _speech()
             self.client = speech.SpeechClient()
             
             # Configure recognition

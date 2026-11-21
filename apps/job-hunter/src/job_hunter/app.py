@@ -5,10 +5,13 @@ from flask_cors import CORS
 from job_hunter.config import Config
 from job_hunter.database import MongoDBManager
 from job_hunter.google_sheets import GoogleSheetsManager
-from job_hunter.orchestrator import JobApplicationOrchestrator
+from job_hunter.security import api_access_decision
+import logging
 import os
 from werkzeug.utils import secure_filename
 from pathlib import Path
+
+logger = logging.getLogger("job_hunter.app")
 
 # Get the directory where this module is located
 MODULE_DIR = Path(__file__).parent
@@ -35,8 +38,29 @@ CORS(
 # Ensure upload folder exists
 os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 
-# Initialize managers
-db = MongoDBManager()
+# Connect on first use so importing the app does not require MongoDB.
+_db = None
+
+
+def get_db():
+    global _db
+    if _db is None:
+        _db = MongoDBManager()
+    return _db
+
+
+@app.before_request
+def require_api_token():
+    if request.method == "OPTIONS" or not request.path.startswith("/api/"):
+        return None
+    decision = api_access_decision(
+        request.headers.get("Authorization"),
+        os.getenv("JOB_HUNTER_API_TOKEN", ""),
+    )
+    if decision is None:
+        return None
+    status_code, detail = decision
+    return jsonify({"success": False, "error": detail}), status_code
 
 
 @app.route("/")
@@ -49,10 +73,11 @@ def index():
 def get_applications(user_id):
     """Get all applications for a user"""
     try:
-        applications = db.get_user_applications(user_id)
+        applications = get_db().get_user_applications(user_id)
         return jsonify({"success": True, "applications": applications, "count": len(applications)})
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.exception("Request failed")
+        return jsonify({"success": False, "error": "Request failed"}), 500
 
 
 @app.route("/api/applications/google-sheets")
@@ -74,8 +99,8 @@ def get_applications_from_sheets():
         )
     except Exception as e:
         return jsonify(
-            {"success": False, "error": str(e), "applications": [], "count": 0}
-        ), 200  # Return 200 to prevent UI error
+            {"success": False, "error": "Google Sheets request failed", "applications": [], "count": 0}
+        ), 502
 
 
 @app.route("/api/applications/<user_id>/status", methods=["POST"])
@@ -90,7 +115,7 @@ def update_application_status(user_id):
             return jsonify({"success": False, "error": "Missing apply_link or status"}), 400
 
         # Update in MongoDB
-        db.update_application_status(user_id, apply_link, new_status)
+        get_db().update_application_status(user_id, apply_link, new_status)
 
         # Update in Google Sheets
         sheets = GoogleSheetsManager()
@@ -98,17 +123,19 @@ def update_application_status(user_id):
 
         return jsonify({"success": True, "message": "Status updated successfully"})
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.exception("Request failed")
+        return jsonify({"success": False, "error": "Request failed"}), 500
 
 
 @app.route("/api/preferences/<user_id>")
 def get_preferences(user_id):
     """Get user preferences"""
     try:
-        preferences = db.get_user_preferences(user_id)
+        preferences = get_db().get_user_preferences(user_id)
         return jsonify({"success": True, "preferences": preferences or {}})
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.exception("Request failed")
+        return jsonify({"success": False, "error": "Request failed"}), 500
 
 
 @app.route("/api/preferences/<user_id>", methods=["POST"])
@@ -116,17 +143,18 @@ def save_preferences(user_id):
     """Save user preferences"""
     try:
         preferences = request.json
-        db.save_user_preferences(user_id, preferences)
+        get_db().save_user_preferences(user_id, preferences)
         return jsonify({"success": True, "message": "Preferences saved successfully"})
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.exception("Request failed")
+        return jsonify({"success": False, "error": "Request failed"}), 500
 
 
 @app.route("/api/stats/<user_id>")
 def get_stats(user_id):
     """Get application statistics"""
     try:
-        applications = db.get_user_applications(user_id)
+        applications = get_db().get_user_applications(user_id)
 
         stats = {
             "total_applications": len(applications),
@@ -151,7 +179,8 @@ def get_stats(user_id):
 
         return jsonify({"success": True, "stats": stats})
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.exception("Request failed")
+        return jsonify({"success": False, "error": "Request failed"}), 500
 
 
 @app.route("/api/upload-resume", methods=["POST"])
@@ -173,6 +202,8 @@ def upload_resume():
             file.save(filepath)
 
             # Start job application process
+            from job_hunter.orchestrator import JobApplicationOrchestrator
+
             orchestrator = JobApplicationOrchestrator(user_id)
             result = orchestrator.run(filepath)
             orchestrator.cleanup()
@@ -187,25 +218,32 @@ def upload_resume():
         else:
             return jsonify({"success": False, "error": "Only PDF files are supported"}), 400
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.exception("Request failed")
+        return jsonify({"success": False, "error": "Request failed"}), 500
 
 
 @app.route("/api/job-portals")
 def get_job_portals():
     """Get all job portals"""
     try:
-        portals = db.get_all_job_portals()
+        portals = get_db().get_all_job_portals()
         return jsonify({"success": True, "portals": portals})
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.exception("Request failed")
+        return jsonify({"success": False, "error": "Request failed"}), 500
 
 
 def run_app():
     """Run the Flask application"""
+    if not Config.FLASK_SECRET_KEY:
+        import secrets
+
+        app.config["SECRET_KEY"] = secrets.token_hex(32)
+        logger.warning("FLASK_SECRET_KEY is unset. Using a process-local secret.")
     app.run(
         host=Config.FLASK_HOST,
         port=Config.FLASK_PORT,
-        debug=True,
+        debug=os.getenv("FLASK_DEBUG", "false").lower() == "true",
         use_reloader=False,  # Disable reloader to prevent restarts when other agents modify files
     )
 

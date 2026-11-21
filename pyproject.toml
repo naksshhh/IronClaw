@@ -56,6 +56,7 @@ members = [
     "packages/shared",
     "packages/adb-client",
     "packages/vapi-client",
+    "packages/mobilerun-client",
 ]
 
 [tool.uv.sources]
@@ -64,6 +65,7 @@ ironclaw-shared = { workspace = true }
 ironclaw-adb = { workspace = true }
 ironclaw-vapi = { workspace = true }
 ironclaw-job-hunter = { workspace = true }
+ironclaw-mobilerun = { workspace = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["apps/gateway/src/ironclaw"]
@@ -86,8 +88,12 @@ testpaths = [
     "apps/gateway/tests",
     "apps/job-hunter/tests",
     "packages/shared/tests",
-    "packages/adb-client/tests",
-    "packages/vapi-client/tests",
+]
+pythonpath = [
+    "apps/gateway/src",
+    "apps/job-hunter/src",
+    "packages/shared/src",
+    "packages/mobilerun-client/src",
 ]
 python_files = "test_*.py"
 python_functions = "test_*"

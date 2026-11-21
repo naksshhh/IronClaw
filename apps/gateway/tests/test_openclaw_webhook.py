@@ -392,7 +392,7 @@ class TestOpenClawService:
         response = await service.handle_webhook(request, "Bearer wrong")
 
         assert response.ok is False
-        assert "authorization" in response.error.lower()
+        assert response.error == "Invalid token"
 
     def test_get_task_status_not_found(self, service):
         """Test getting status for non-existent task."""

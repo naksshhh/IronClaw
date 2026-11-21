@@ -8,7 +8,6 @@ bypassing the complex execution service to avoid compatibility issues.
 import asyncio
 import logging
 import os
-from pathlib import Path
 from typing import Optional, List
 
 import httpx
@@ -16,20 +15,12 @@ from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-# Load .env from project root
-PROJECT_ROOT = Path(__file__).resolve().parents[6]  # Navigate up to monorepo root
-ENV_PATH = PROJECT_ROOT / ".env"
+from ..utils.config import MONOREPO_ROOT
+
+# Load .env from the repository root. parents[6] is the directory above it.
+ENV_PATH = MONOREPO_ROOT / ".env"
 if ENV_PATH.exists():
     load_dotenv(ENV_PATH)
-else:
-    # Fallback: try to find .env by walking up directories
-    current = Path(__file__).resolve().parent
-    while current != current.parent:
-        potential_env = current / ".env"
-        if potential_env.exists():
-            load_dotenv(potential_env)
-            break
-        current = current.parent
 
 logger = logging.getLogger("ironclaw.api.chat_cloud")
 logger.info(f"Loaded .env from: {ENV_PATH if ENV_PATH.exists() else 'fallback location'}")

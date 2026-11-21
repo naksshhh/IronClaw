@@ -9,6 +9,7 @@ import asyncio
 import logging
 import subprocess
 import shutil
+import time
 from typing import Optional, AsyncIterator
 from dataclasses import dataclass
 from enum import Enum
@@ -21,6 +22,31 @@ class ExecutionBackend(str, Enum):
     MOBILERUN_CLOUD = "mobilerun_cloud"
     DROIDRUN_LOCAL = "droidrun_local"
     NONE = "none"
+
+
+_TERMINAL_TASK_STATES = {"completed", "failed", "cancelled"}
+
+
+def adb_device_attached(adb_stdout: str) -> bool:
+    """True when `adb devices` lists at least one device in the ready state."""
+    lines = adb_stdout.splitlines()
+    for line in lines[1:]:
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == "device":
+            return True
+    return False
+
+
+def constrain_command(command: str, packages: Optional[list[str]]) -> str:
+    """Tell the cloud agent which packages it is allowed to open."""
+    allowed = [pkg for pkg in (packages or []) if pkg]
+    if not allowed:
+        return command
+    return (
+        f"{command}\n\n"
+        "Security constraint: only open or interact with these Android packages: "
+        f"{', '.join(allowed)}. If any other package is in the foreground, press Home and stop."
+    )
 
 
 @dataclass
@@ -67,6 +93,9 @@ class ExecutionService:
         mobilerun_base_url: str = "https://api.mobilerun.ai",
         local_device_serial: Optional[str] = None,
         prefer_local: bool = False,
+        allowed_packages: Optional[list[str]] = None,
+        task_timeout: float = 300.0,
+        poll_interval: float = 2.0,
     ):
         """
         Initialize execution service.
@@ -77,12 +106,18 @@ class ExecutionService:
             mobilerun_base_url: MobileRun API URL
             local_device_serial: Local ADB device serial (optional)
             prefer_local: If True, prefer local DroidRun over cloud
+            allowed_packages: Android packages the agent may open
+            task_timeout: How long to wait for a cloud task to finish
+            poll_interval: Seconds between cloud task status checks
         """
         self.mobilerun_api_key = mobilerun_api_key
         self.mobilerun_device_id = mobilerun_device_id
         self.mobilerun_base_url = mobilerun_base_url
         self.local_device_serial = local_device_serial
         self.prefer_local = prefer_local
+        self.allowed_packages = list(allowed_packages or [])
+        self.task_timeout = task_timeout
+        self.poll_interval = poll_interval
 
         self._mobilerun_client = None
         self._backend_cache: Optional[ExecutionBackend] = None
@@ -111,32 +146,30 @@ class ExecutionService:
         return False
 
     async def check_droidrun_available(self) -> bool:
-        """Check if local DroidRun CLI is available with a connected device."""
-        # Check if droidrun CLI is installed
-        if not shutil.which("droidrun"):
-            logger.info("DroidRun CLI not found in PATH")
+        """Check whether adb sees a device. This does not run a command on the phone."""
+        if shutil.which("adb") is None:
+            logger.info("adb not found in PATH")
             return False
 
         try:
-            # Try a simple command to test connectivity
             result = await asyncio.to_thread(
                 subprocess.run,
-                ["droidrun", "run", "echo test", "--steps", "1"],
+                ["adb", "devices"],
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=5,
             )
-            # If it fails with "no device", return False
-            if "no device" in result.stderr.lower() or "not found" in result.stderr.lower():
-                logger.info("No local device connected for DroidRun")
-                return False
-            return True
         except subprocess.TimeoutExpired:
-            logger.warning("DroidRun check timed out")
+            logger.warning("adb devices timed out")
             return False
         except Exception as e:
-            logger.warning(f"DroidRun check failed: {e}")
+            logger.warning(f"adb devices failed: {e}")
             return False
+
+        if result.returncode != 0:
+            logger.info("adb devices failed: %s", result.stderr.strip())
+            return False
+        return adb_device_attached(result.stdout)
 
     async def get_available_backend(self, force_refresh: bool = False) -> ExecutionBackend:
         """
@@ -213,35 +246,65 @@ class ExecutionService:
         reasoning: bool,
         llm_model: Optional[str] = None,
     ) -> ExecutionResult:
-        """Execute via MobileRun Cloud."""
+        """Create a MobileRun task and wait until it finishes."""
         try:
             client = self._get_mobilerun_client()
+            if client is None:
+                return ExecutionResult(
+                    success=False,
+                    backend=ExecutionBackend.MOBILERUN_CLOUD,
+                    error="MobileRun client is not configured",
+                )
             task = await client.run_task(
                 device_id=self.mobilerun_device_id,
-                command=command,
+                command=constrain_command(command, self.allowed_packages),
                 max_steps=max_steps,
                 vision=vision,
                 reasoning=reasoning,
                 llm_model=llm_model,
+                apps=self.allowed_packages or None,
             )
-
-            # The v1 API returns immediately with task creation confirmation
-            # For now, return success with the task ID
-            return ExecutionResult(
-                success=True,
-                backend=ExecutionBackend.MOBILERUN_CLOUD,
-                output=f"Task created successfully. Task ID: {task.task_id}",
-                task_id=task.task_id,
-                screenshots=[],
-                steps=0,
-            )
+            return await self._await_mobilerun_task(client, task.task_id)
         except Exception as e:
             logger.error(f"MobileRun execution failed: {e}", exc_info=True)
             return ExecutionResult(
                 success=False,
                 backend=ExecutionBackend.MOBILERUN_CLOUD,
-                error=str(e),
+                error="MobileRun execution failed",
             )
+
+    async def _await_mobilerun_task(self, client, task_id: str) -> ExecutionResult:
+        """Poll until the task is completed, failed, cancelled, or timed out.
+
+        Creating a task is not success. The caller only hears success after
+        the status endpoint reports completed.
+        """
+        deadline = time.monotonic() + self.task_timeout
+        last_state = "pending"
+        while True:
+            status = await client.get_task_status(task_id)
+            raw_state = getattr(status, "status", "")
+            state = raw_state.value if hasattr(raw_state, "value") else str(raw_state)
+            last_state = state.lower()
+            if last_state in _TERMINAL_TASK_STATES:
+                succeeded = last_state == "completed"
+                result = getattr(status, "result", None)
+                return ExecutionResult(
+                    success=succeeded,
+                    backend=ExecutionBackend.MOBILERUN_CLOUD,
+                    output=str(result) if succeeded and result is not None else ("Task completed." if succeeded else None),
+                    error=None if succeeded else (getattr(status, "error", None) or f"Task {last_state}"),
+                    task_id=task_id,
+                    steps=int(getattr(status, "progress", 0) or 0),
+                )
+            if time.monotonic() >= deadline:
+                return ExecutionResult(
+                    success=False,
+                    backend=ExecutionBackend.MOBILERUN_CLOUD,
+                    error=f"Task {task_id} still {last_state} after {self.task_timeout}s",
+                    task_id=task_id,
+                )
+            await asyncio.sleep(self.poll_interval)
 
     async def _execute_droidrun(
         self,
@@ -356,6 +419,14 @@ class ExecutionService:
 _service_instance: Optional[ExecutionService] = None
 
 
+def _allowed_packages_from_config() -> list[str]:
+    try:
+        from ..utils.config import get_app_config
+        return list(get_app_config().safe_packages)
+    except Exception:
+        return []
+
+
 def get_execution_service() -> ExecutionService:
     """Get the singleton execution service."""
     global _service_instance
@@ -367,6 +438,7 @@ def get_execution_service() -> ExecutionService:
             mobilerun_device_id=os.getenv("MOBILERUN_DEVICE_ID"),
             local_device_serial=os.getenv("DEVICE_SERIAL"),
             prefer_local=os.getenv("PREFER_LOCAL_DEVICE", "false").lower() == "true",
+            allowed_packages=_allowed_packages_from_config(),
         )
     return _service_instance
 

@@ -50,8 +50,8 @@ class Config:
     AGENT_TEMPERATURE = float(os.getenv("AGENT_TEMPERATURE", "0.5"))
 
     # Flask Configuration
-    FLASK_SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "dev-secret-key-change-in-production")
-    FLASK_HOST = os.getenv("FLASK_HOST", "0.0.0.0")
+    FLASK_SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "")
+    FLASK_HOST = os.getenv("FLASK_HOST", "127.0.0.1")
     FLASK_PORT = int(os.getenv("FLASK_PORT", "5123"))
 
     # Default Job Portals

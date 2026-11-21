@@ -5,7 +5,6 @@ Handles interaction from the web interface.
 
 import logging
 import os
-import shutil
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -15,7 +14,15 @@ from pydantic import BaseModel
 
 from ..agents.ironclaw_agent import create_ironclaw_agent
 from ..modules.tab_manager import TabManagerService
-from ..utils.config import get_settings
+from ..utils.config import get_app_config, get_settings
+from ..utils.intent import (
+    is_close_old_tabs,
+    is_greeting,
+    is_job_intent,
+    is_list_tabs,
+    is_organize_tabs,
+)
+from ..utils.uploads import MAX_UPLOAD_BYTES, UploadRejected, resolve_upload_path
 
 logger = logging.getLogger("ironclaw.api.chat")
 router = APIRouter()
@@ -102,32 +109,17 @@ async def chat_handler(request: ChatRequest):
     """
     logger.info(f"Received chat message: {request.message}")
 
-    # Resolve image path
+    # Resolve image path. Only a filename the client named is used, and it
+    # has to stay inside the upload directory.
     image_path = None
     if request.image_filename:
-        image_path = UPLOAD_DIR / request.image_filename
-        if not image_path.exists():
-            logger.warning(f"Requested image not found: {image_path}")
-            image_path = None
-
-    # Fallback: Check for very recent upload (within last 30 seconds) if no image specified
-    # This handles the case where user uploads then immediately sends text in a separate request
-    if not image_path:
         try:
-            import time
-
-            current_time = time.time()
-            # Find files in upload dir
-            files = list(UPLOAD_DIR.glob("*"))
-            if files:
-                # Sort by modification time, newest first
-                newest_file = max(files, key=lambda f: f.stat().st_mtime)
-                # If younger than 30 seconds, use it
-                if current_time - newest_file.stat().st_mtime < 30:
-                    logger.info(f"Using recently uploaded file context: {newest_file.name}")
-                    image_path = newest_file
-        except Exception as e:
-            logger.error(f"Failed to check recent uploads: {e}")
+            image_path = resolve_upload_path(UPLOAD_DIR, request.image_filename)
+        except UploadRejected as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not image_path.exists():
+            logger.warning(f"Requested image not found: {image_path.name}")
+            image_path = None
 
     # Check for Personalization Intent
     # Priority check: If user explicitly mentions "wallpaper" or "personalize" AND an image is provided
@@ -157,51 +149,23 @@ async def chat_handler(request: ChatRequest):
 
     # Basic intent check (could be improved with an LLM router)
     # If the user just says "hi", we don't want to launch a full agent.
-    if request.message.lower().strip() in ["hi", "hello", "hey"]:
+    if is_greeting(request.message):
         return ChatResponse(
             response="Hello! I am Iron Claw. I can help you automate tasks on your Android device. Try saying 'Open Settings', 'Apply for jobs', 'Organize my tabs', or 'Close old tabs'.",
             success=True,
         )
 
     # Check for tab management commands
-    message_lower = request.message.lower()
-    if "organize" in message_lower and ("tab" in message_lower or "chrome" in message_lower):
+    if is_organize_tabs(request.message):
         return await _handle_tab_organization()
-    elif (
-        ("close" in message_lower or "delete" in message_lower)
-        and "tab" in message_lower
-        and ("old" in message_lower or "older" in message_lower)
-    ):
+    elif is_close_old_tabs(request.message):
         return await _handle_close_old_tabs(request.message)
-    elif "list" in message_lower and "tab" in message_lower:
+    elif is_list_tabs(request.message):
         return await _handle_list_tabs()
 
-    # Check for job hunting commands
-    # If user mentions job-related keywords, route to Job Hunter service
-    job_keywords = [
-        "job",
-        "apply",
-        "resume",
-        "career",
-        "employment",
-        "hire",
-        "position",
-        "find me a",
-    ]
-    is_job_intent = any(kw in message_lower for kw in job_keywords)
-
-    if is_job_intent:
-        # Check if there's a recently uploaded PDF (resume)
-        uploaded_pdf = None
-        if image_path and str(image_path).endswith(".pdf"):
-            uploaded_pdf = image_path
-        else:
-            # Check for any PDF in uploads
-            pdfs = list(UPLOAD_DIR.glob("*.pdf"))
-            if pdfs:
-                # Get most recent PDF
-                uploaded_pdf = max(pdfs, key=lambda f: f.stat().st_mtime)
-
+    if is_job_intent(request.message):
+        # A resume is used only when this request named that PDF.
+        uploaded_pdf = image_path if image_path and image_path.suffix.lower() == ".pdf" else None
         return await _handle_job_hunting(request.message, uploaded_pdf)
 
     # Check if we should use cloud mode (MobileRun API)
@@ -225,9 +189,10 @@ async def chat_handler(request: ChatRequest):
             from ..services.execution_service import get_execution_service
             
             service = get_execution_service()
+            max_steps = int(get_app_config().agent_config.get("max_steps", 30))
             result = await service.execute(
                 command=request.message,
-                max_steps=100,
+                max_steps=max_steps,
                 vision=True,
                 reasoning=True,
                 llm_model=llm_model,
@@ -247,10 +212,7 @@ async def chat_handler(request: ChatRequest):
             logger.error(f"Cloud execution failed with error: {e}", exc_info=True)
             # If mode is explicitly "cloud", don't fall back - return the error
             if request.mode == "cloud":
-                return ChatResponse(
-                    response=f"Cloud execution failed: {str(e)}",
-                    success=False,
-                )
+                raise HTTPException(status_code=502, detail="Cloud execution failed") from e
             # Otherwise fall back to local agent execution
             logger.info("Falling back to local agent execution")
 
@@ -285,12 +247,14 @@ async def chat_handler(request: ChatRequest):
             success=result["success"],
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Chat processing failed: {e}")
-        return ChatResponse(
-            response=f"I encountered an error while processing your request: {str(e)}",
-            success=False,
-        )
+        raise HTTPException(
+            status_code=500,
+            detail="I encountered an error while processing your request.",
+        ) from e
 
 
 @router.post("/upload")
@@ -300,22 +264,28 @@ async def upload_file(file: UploadFile = File(...)):
     Saves files to data/uploads.
     """
     try:
-        file_path = UPLOAD_DIR / file.filename
-        with file_path.open("wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        safe_path = resolve_upload_path(UPLOAD_DIR, file.filename or "")
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="Empty file")
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="File exceeds 16MB limit")
+        safe_path.write_bytes(content)
 
-        logger.info(f"File uploaded: {file_path}")
-
-        # If it's a resume, we might want to trigger parsing (TODO)
+        logger.info(f"File uploaded: {safe_path.name}")
 
         return {
-            "filename": file.filename,
-            "url": f"/files/{file.filename}",  # We'd need to serve this statically
+            "filename": safe_path.name,
+            "url": f"/files/{safe_path.name}",
             "message": "File uploaded successfully",
         }
+    except UploadRejected as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Upload failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Upload failed") from e
     finally:
         file.file.close()
 
@@ -368,7 +338,7 @@ async def schedule_call_proxy(request: dict):
 
     except Exception as e:
         logger.error(f"Schedule call failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Schedule call failed") from e
 
 
 class TranscriptionResponse(BaseModel):
@@ -415,7 +385,7 @@ async def transcribe_audio(audio: UploadFile = File(...)):
         raise
     except Exception as e:
         logger.error(f"Transcription failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Transcription failed") from e
 
 
 async def _transcribe_with_gemini(audio_path: str, api_key: str) -> str:
@@ -585,7 +555,7 @@ async def _handle_job_hunting(message: str, resume_path: Optional[Path] = None) 
         3. Apply to 2 jobs using Easy Apply (skip jobs requiring external applications)
         4. complete the application flow/form as needed
         5. if you dont see the next or apply button try to scroll/swipe down or up to reveal it
-        6. if they ask for futher questions like how many years of experience answer with 2-3 years or with question like experience in this answer yes 
+        6. Answer application questions only with facts from the parsed resume. If a required answer is not in the resume, skip that application.
 
         After each successful application, note:
         - Job Title
@@ -595,7 +565,6 @@ async def _handle_job_hunting(message: str, resume_path: Optional[Path] = None) 
         - Application Link
         
         Target: Apply to 2 jobs total.
-        Fabiricate data if needed to complete applications.
         Report each successful application with job details.
         
         IMPORTANT: Use vision to read and interact with all UI elements.

@@ -14,6 +14,7 @@ The flow:
 """
 
 import asyncio
+import hmac
 import json
 import logging
 import os
@@ -211,14 +212,21 @@ class OpenClawService:
         Returns:
             True if valid, False otherwise
         """
-        if not authorization:
-            return False
-
-        if not authorization.startswith("Bearer "):
+        if not self.hook_token or not authorization or not authorization.startswith("Bearer "):
             return False
 
         token = authorization.split(" ", 1)[1]
-        return token == self.hook_token
+        return hmac.compare_digest(token, self.hook_token)
+
+    def auth_error(self, authorization: Optional[str]) -> Optional[str]:
+        """Return a client-facing auth error, or None when the token matches."""
+        if not self.hook_token:
+            return "OPENCLAW_HOOK_TOKEN is not configured"
+        if not authorization or not authorization.startswith("Bearer "):
+            return "Missing authorization token"
+        if not self.validate_token(authorization):
+            return "Invalid token"
+        return None
 
     def register_processor(
         self, processor: Callable[[TaskInfo, WebhookRequest], Awaitable[dict]]
@@ -247,12 +255,12 @@ class OpenClawService:
         Returns:
             WebhookResponse with status and runId
         """
-        # Validate token
-        if not self.validate_token(authorization):
-            logger.warning(f"Invalid token for task {request.taskId}")
+        auth_failure = self.auth_error(authorization)
+        if auth_failure:
+            logger.warning(f"Rejected OpenClaw webhook for task {request.taskId}: {auth_failure}")
             return WebhookResponse(
                 ok=False,
-                error="Invalid or missing authorization token",
+                error=auth_failure,
             )
 
         # Route by request type

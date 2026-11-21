@@ -275,7 +275,7 @@ cp .env.example .env
 **Option 2: Manual Start**
 ```bash
 # Terminal 1: Gateway
-cd apps/gateway && uv run uvicorn ironclaw.main:app --reload --host 0.0.0.0 --port 8000
+cd apps/gateway && uv run uvicorn ironclaw.main:app --reload --host 127.0.0.1 --port 8000
 
 # Terminal 2: Job Hunter
 cd apps/job-hunter && uv run python -m job_hunter.main web

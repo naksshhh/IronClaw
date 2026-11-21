@@ -1,6 +1,7 @@
 const WebSocket = require('ws');
-const { spawn, exec, execSync } = require('child_process');
+const { spawn, exec } = require('child_process');
 const http = require('http');
+const { tapArgs, swipeArgs, keyeventArgs } = require('./input');
 
 const WSS_PORT = 8080;
 const HTTP_PORT = 8081;
@@ -76,48 +77,27 @@ function getVolume() {
 // Input Injection
 // =============================================================================
 
+function runAdb(args) {
+    if (!args) {
+        return;
+    }
+    const child = spawn('adb', args, { stdio: 'ignore' });
+    child.on('error', (error) => console.error(`adb failed: ${error.message}`));
+}
+
 function injectTouch(type, x, y) {
-    const deviceX = Math.round(x * deviceWidth);
-    const deviceY = Math.round(y * deviceHeight);
-    console.log(`Touch: type=${type}, device=(${deviceX}, ${deviceY})`);
-
-    let cmd;
-    switch (type) {
-        case 'tap':
-        case 'up':
-            cmd = `adb shell input tap ${deviceX} ${deviceY}`;
-            break;
-        default:
-            return;
+    if (type !== 'tap' && type !== 'up') {
+        return;
     }
-
-    if (cmd) {
-        exec(cmd, (error) => {
-            if (error) console.error(`Touch failed: ${error.message}`);
-        });
-    }
+    runAdb(tapArgs(x, y, deviceWidth, deviceHeight));
 }
 
 function injectSwipe(startX, startY, endX, endY, duration = 300) {
-    const sx = Math.round(startX * deviceWidth);
-    const sy = Math.round(startY * deviceHeight);
-    const ex = Math.round(endX * deviceWidth);
-    const ey = Math.round(endY * deviceHeight);
-
-    exec(`adb shell input swipe ${sx} ${sy} ${ex} ${ey} ${duration}`, (error) => {
-        if (error) console.error(`Swipe failed: ${error.message}`);
-    });
+    runAdb(swipeArgs(startX, startY, endX, endY, duration, deviceWidth, deviceHeight));
 }
 
 function injectKey(keycode) {
-    const keycodes = {
-        'back': 4, 'home': 3, 'recent': 187,
-        'power': 26, 'volume_up': 24, 'volume_down': 25
-    };
-    const code = keycodes[keycode] || keycode;
-    exec(`adb shell input keyevent ${code}`, (error) => {
-        if (error) console.error(`Key failed: ${error.message}`);
-    });
+    runAdb(keyeventArgs(keycode));
 }
 
 // =============================================================================
