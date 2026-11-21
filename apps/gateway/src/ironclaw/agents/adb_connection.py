@@ -6,9 +6,17 @@ import logging
 import re
 from typing import Optional
 
-from droidrun.tools.android.adb import AdbTools
-
 from ..utils.config import get_settings
+
+
+def _load_adb_tools():
+    """Import the ADB helper from whichever package name is installed."""
+    try:
+        from droidrun.tools.android.adb import AdbTools
+        return AdbTools
+    except ImportError:
+        from mobilerun.tools import AndroidDriver
+        return AndroidDriver
 
 logger = logging.getLogger("ironclaw.agents.adb")
 
@@ -20,7 +28,7 @@ class ADBConnection:
     """
 
     _instance: Optional["ADBConnection"] = None
-    _tools: Optional[AdbTools] = None
+    _tools: Optional[object] = None
 
     def __new__(cls):
         """Singleton pattern - one connection per application."""
@@ -28,14 +36,15 @@ class ADBConnection:
             cls._instance = super().__new__(cls)
         return cls._instance
 
-    async def get_tools(self) -> AdbTools:
-        """Get or create AdbTools instance."""
+    async def get_tools(self):
+        """Get or create the device tool client."""
         if self._tools is None:
             settings = get_settings()
+            tools_cls = _load_adb_tools()
 
             logger.info(f"Initializing ADB connection: {settings.device_serial or 'auto-detect'}")
 
-            self._tools = AdbTools(
+            self._tools = tools_cls(
                 serial=settings.device_serial,
                 use_tcp=settings.use_tcp,
             )

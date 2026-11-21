@@ -7,8 +7,13 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from droidrun import DroidAgent
-from droidrun.config_manager import AgentConfig, DroidrunConfig
+try:
+    from droidrun import DroidAgent
+    from droidrun.config_manager import AgentConfig, DroidrunConfig
+except ImportError:
+    # Current releases renamed the package and the config class.
+    from mobilerun.agent.droid import MobileAgent as DroidAgent
+    from mobilerun.config_manager import AgentConfig, MobileConfig as DroidrunConfig
 from llama_index.llms.google_genai import GoogleGenAI
 
 from ..utils.config import get_app_config, get_settings

@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from "react";
+import { GATEWAY_WS, withToken } from "@/lib/gateway";
 
 interface UseSpeechToTextOptions {
     /**
@@ -56,7 +57,7 @@ export function useSpeechToText(options: UseSpeechToTextOptions = {}): UseSpeech
         onInterimResult,
         onFinalResult,
         onError,
-        wsUrl = "ws://localhost:8000/api/v1/speech/ws/speech-to-text",
+        wsUrl = withToken(`${GATEWAY_WS}/api/v1/speech/ws/speech-to-text`),
     } = options;
 
     const [isListening, setIsListening] = useState(false);

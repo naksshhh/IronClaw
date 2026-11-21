@@ -13,6 +13,7 @@ import {
     ChevronDown
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { GATEWAY_WS, withToken } from "@/lib/gateway";
 import { useMobileRunDevices, MobileRunDevice } from "@/hooks/useMobileRunDevices";
 import { useDevice } from "@/contexts/DeviceContext";
 
@@ -23,9 +24,9 @@ interface DeviceInfo {
 
 type ConnectionState = 'disconnected' | 'connecting' | 'signaling' | 'connected' | 'error';
 
-// Use gateway proxy for WebSocket to avoid browser header limitations
-// The gateway adds the Authorization header that MobileRun requires
-const GATEWAY_WS_BASE = "ws://localhost:8000/api/v1/mobilerun/devices";
+// Use gateway proxy for WebSocket to avoid browser header limitations.
+// The gateway adds the Authorization header that MobileRun requires.
+const GATEWAY_WS_BASE = `${GATEWAY_WS}/api/v1/mobilerun/devices`;
 
 export const DeviceMirrorCloud = () => {
     const videoRef = useRef<HTMLVideoElement>(null);
@@ -295,7 +296,7 @@ export const DeviceMirrorCloud = () => {
             const streamUrl = `${GATEWAY_WS_BASE}/${selectedDevice.id}/stream`;
             console.log(`[Cloud] Connecting to gateway proxy: ${streamUrl}`);
 
-            const ws = new WebSocket(streamUrl);
+            const ws = new WebSocket(withToken(streamUrl));
             wsRef.current = ws;
 
             // Generate a unique session ID for this connection

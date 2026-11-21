@@ -55,10 +55,11 @@ class Settings(BaseSettings):
     google_sheets_credentials_file: Optional[str] = Field(default=None, description="Path to Google Sheets service account credentials JSON")
     google_sheets_spreadsheet_id: Optional[str] = Field(default=None, description="Google Sheets spreadsheet ID")
 
-    # Server
-    host: str = Field(default="0.0.0.0")
+    # Server. Bind to loopback unless the operator sets HOST.
+    host: str = Field(default="127.0.0.1")
     port: int = Field(default=8000)
     debug: bool = Field(default=False)
+    api_token: str = Field(default="", description="Bearer token required on gateway API routes")
 
     class Config:
         # Load from monorepo root .env file

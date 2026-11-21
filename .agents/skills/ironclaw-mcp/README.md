@@ -28,7 +28,7 @@ cd /path/to/monorepo
 
 # Or manually:
 cd apps/gateway
-uv run uvicorn ironclaw.main:app --host 0.0.0.0 --port 8000
+uv run uvicorn ironclaw.main:app --host 127.0.0.1 --port 8000
 ```
 
 ### 2. Start Cloudflare Tunnel (for cloud access)

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useDevice } from '@/contexts/DeviceContext';
+import { GATEWAY_HTTP, authHeaders } from '@/lib/gateway';
 
 export interface MobileRunDevice {
     id: string;
@@ -39,7 +40,7 @@ interface UseMobileRunDevicesResult {
 }
 
 // Use the local gateway proxy to avoid CORS issues
-const GATEWAY_API_URL = 'http://localhost:8000/api/v1/mobilerun';
+const GATEWAY_API_URL = `${GATEWAY_HTTP}/api/v1/mobilerun`;
 
 export function useMobileRunDevices(): UseMobileRunDevicesResult {
     const [devices, setDevices] = useState<MobileRunDevice[]>([]);
@@ -60,16 +61,12 @@ export function useMobileRunDevices(): UseMobileRunDevicesResult {
                     `${GATEWAY_API_URL}/devices?page=1&pageSize=20&orderBy=createdAt&orderByDirection=desc`,
                     {
                         method: 'GET',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
+                        headers: authHeaders({ 'Content-Type': 'application/json' }),
                     }
                 ),
                 fetch(`${GATEWAY_API_URL}/physical-device`, {
                     method: 'GET',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
+                    headers: authHeaders({ 'Content-Type': 'application/json' }),
                 })
             ]);
 

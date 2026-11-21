@@ -5,7 +5,11 @@ import json
 import logging
 import asyncio
 import re
-from droidrun import DroidAgent, DroidrunConfig, DeviceConfig
+try:
+    from droidrun import DroidAgent, DroidrunConfig, DeviceConfig
+except ImportError:
+    from mobilerun.agent.droid import MobileAgent as DroidAgent
+    from mobilerun.config_manager import DeviceConfig, MobileConfig as DroidrunConfig
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -61,9 +65,14 @@ async def get_current_focused_app():
     Checks the currently focused app using adb.
     """
     try:
-        cmd = "adb shell dumpsys window windows | grep -E 'mCurrentFocus'"
-        proc = await asyncio.create_subprocess_shell(
-            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        proc = await asyncio.create_subprocess_exec(
+            "adb",
+            "shell",
+            "dumpsys",
+            "window",
+            "windows",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
 
         stdout, stderr = await proc.communicate()

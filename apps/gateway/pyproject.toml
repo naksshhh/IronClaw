@@ -24,6 +24,7 @@ dependencies = [
     "ironclaw-shared",
     "ironclaw-adb",
     "ironclaw-vapi",
+    "ironclaw-mobilerun",
 ]
 
 [project.optional-dependencies]

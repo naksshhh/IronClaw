@@ -122,6 +122,7 @@ class MobileRunClient:
         vision: bool = True,
         reasoning: bool = False,
         llm_model: Optional[str] = None,
+        apps: Optional[list[str]] = None,
     ) -> Task:
         """
         Execute a natural language command on a device.
@@ -133,6 +134,7 @@ class MobileRunClient:
             vision: Enable vision mode (screenshots)
             reasoning: Enable reasoning mode (planning)
             llm_model: LLM model to use (optional)
+            apps: Android packages the task is allowed to open
 
         Returns:
             Task object with execution result
@@ -149,6 +151,8 @@ class MobileRunClient:
         
         if llm_model:
             payload["llmModel"] = llm_model
+        if apps:
+            payload["apps"] = apps
 
         data = await self._request("POST", "/v1/tasks/", json=payload, timeout=300.0)
         

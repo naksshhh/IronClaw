@@ -5,7 +5,8 @@
     "scripts": {
         "start": "node server.js",
         "start:webrtc": "node server-webrtc.js",
-        "start:all": "node server.js & node server-webrtc.js"
+        "start:all": "node server.js & node server-webrtc.js",
+        "test": "node --test input.test.js"
     },
     "dependencies": {
         "ws": "^8.16.0"
